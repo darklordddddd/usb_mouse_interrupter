@@ -1,0 +1,7 @@
+#!/bin/bash
+make
+dmesg -c
+rmmod usbhid
+insmod usb_mouse_interrupt.ko
+
+

@@ -1,0 +1,4 @@
+#!/bin/bash
+rmmod usb_mouse_interrupt
+insmod /lib/modules/4.9.10/kernel/drivers/hid/usbhid/usbhid.ko
+
