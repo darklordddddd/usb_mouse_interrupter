@@ -3,8 +3,6 @@
 #include <linux/module.h>
 #include <linux/usb.h>
 #include <linux/usb/input.h>
-#include <linux/fs.h>
-#include <linux/cdev.h>
 #include <linux/slab.h>
 #include <asm/uaccess.h>
 
@@ -18,7 +16,7 @@ struct my_usb_struct {
 	struct usb_device *udev;
 	struct input_dev *idev;
 	struct urb *irq;
-	
+
 	char *data;
 };
 
@@ -36,13 +34,14 @@ static int usb_open(struct input_dev *dev)
 	mouse->irq->dev = mouse->udev;
 	if (usb_submit_urb(mouse->irq, GFP_KERNEL))
 		return -EIO;
-	
+
 	return 0;
 }
 
 static void usb_close(struct input_dev *dev)
 {
 	struct my_usb_struct *mouse = input_get_drvdata(dev);
+
 	usb_kill_urb(mouse->irq);
 }
 
@@ -56,14 +55,14 @@ static void usb_irq(struct urb *urb)
 	switch (urb->status) {
 	case 0:			// все ОК
 		break;
-	case -ECONNRESET:		
+	case -ECONNRESET:
 	case -ENOENT:
 	case -ESHUTDOWN:
 		return;
 	default:		//ошибка
 		goto resubmit;
 	}
-	
+
 	//разбор прерывания
 	if (data[0] & 0x01)
 		pr_info("interrupt from mouse: left button\n");
@@ -71,7 +70,7 @@ static void usb_irq(struct urb *urb)
 		pr_info("interrupt from mouse: right button\n");
 	if (data[0] & 0x04)
 		pr_info("interrupt from mouse: middle button\n");
-	
+
 	//стандартный ввод мыши
 	input_report_key(dev, BTN_LEFT,   data[0] & 0x01);
 	input_report_key(dev, BTN_RIGHT,  data[0] & 0x02);
@@ -90,7 +89,7 @@ resubmit:
 			"can't resubmit intr");
 }
 
-static int usb_probe(struct usb_interface *interface, 
+static int usb_probe(struct usb_interface *interface,
 						const struct usb_device_id *id)
 {
 	struct usb_device *udev = interface_to_usbdev(interface);
@@ -101,24 +100,23 @@ static int usb_probe(struct usb_interface *interface,
 	int pipe, maxp;
 
 	pr_info("USB_mouse_interr: in probe()\n");
-	
+
 	//проверяем устройство
-	if (!udev)
-	{
+	if (!udev) {
 		pr_err("udev is NULL\n");
 		return -ENODEV;
 	}
 	//находим endpoint, который входной
 	//и interrupt
 	//собираем информацию
-	
+
 	iface_desc = interface->cur_altsetting;
 
 	if (iface_desc->desc.bNumEndpoints != 1) {
 		pr_err("endpoints num != 1\n");
 		return -ENODEV;
 	}
-	
+
 	endpoint = &iface_desc->endpoint[0].desc;
 	if (!usb_endpoint_is_int_in(endpoint)) {
 		pr_err("endpoint isn't a int_in\n");
@@ -128,7 +126,7 @@ static int usb_probe(struct usb_interface *interface,
 	//труба для прерываний
 	pipe = usb_rcvintpipe(udev, endpoint->bEndpointAddress);
 	maxp = usb_maxpacket(udev, pipe, usb_pipeout(pipe));
-	
+
 	//выделяем память под данные
 	dev = kzalloc(sizeof(struct my_usb_struct), GFP_KERNEL);
 	input_dev = input_allocate_device();
@@ -138,7 +136,7 @@ static int usb_probe(struct usb_interface *interface,
 		pr_err("cannot allocate memory for struct my_usb_struct/input_dev");
 		return -ENOMEM;
 	}
-	
+
 	//выделяем data
 	dev->data = kzalloc(8, GFP_ATOMIC);
 	if (!dev->data) {
@@ -147,7 +145,7 @@ static int usb_probe(struct usb_interface *interface,
 		pr_err("cannot allocate memory for data");
 		return -ENOMEM;
 	}
-	
+
 	//выделяем urb
 	dev->irq = usb_alloc_urb(0, GFP_KERNEL);
 	if (!dev->irq) {
@@ -157,11 +155,11 @@ static int usb_probe(struct usb_interface *interface,
 		pr_err("cannot allocate memory for urb");
 		return -ENOMEM;
 	}
-	
+
 	//пишем в структуру
 	dev->udev = udev;
 	dev->idev = input_dev;
-	
+
 	//вытаскиваем данные из мышки
 	if (udev->manufacturer)
 		strlcpy(dev->name, udev->manufacturer, sizeof(dev->name));
@@ -186,7 +184,7 @@ static int usb_probe(struct usb_interface *interface,
 	input_dev->phys = dev->phys;
 	usb_to_input_id(udev, &input_dev->id);
 	input_dev->dev.parent = &interface->dev;
-	
+
 	//выборка срабатывания
 	input_dev->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_REL);
 	input_dev->keybit[BIT_WORD(BTN_MOUSE)] = BIT_MASK(BTN_LEFT) |
@@ -195,13 +193,13 @@ static int usb_probe(struct usb_interface *interface,
 	input_dev->keybit[BIT_WORD(BTN_MOUSE)] |= BIT_MASK(BTN_SIDE) |
 		BIT_MASK(BTN_EXTRA);
 	input_dev->relbit[0] |= BIT_MASK(REL_WHEEL);
-	
+
 	input_set_drvdata(input_dev, dev);
-	
+
 	//выбор функций для открытия/закрытия
 	input_dev->open = usb_open;
 	input_dev->close = usb_close;
-	
+
 	//включаем urb для прерываний
 	usb_fill_int_urb(dev->irq, udev, pipe, dev->data,
 		(maxp > 8 ? 8 : maxp),
@@ -216,7 +214,7 @@ static int usb_probe(struct usb_interface *interface,
 		pr_err("cannot allocate memory for urb");
 		return -ENOMEM;
 	}
-	
+
 	//сохраняем данные в интерфейс
 	usb_set_intfdata(interface, dev);
 
