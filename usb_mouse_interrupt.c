@@ -4,11 +4,19 @@
 #include <linux/usb.h>
 #include <linux/usb/input.h>
 #include <linux/slab.h>
+#include <linux/string.h>
+#include <linux/fs.h>
+#include <linux/cdev.h>
 #include <asm/uaccess.h>
 
 #define DEVICE_NAME "usb_mouse_interrupter"
 #define USB_MOUSE_VENDOR_ID 0x0458
 #define USB_MOUSE_DEVICE_ID 0x003a
+
+static dev_t usb_mouse_dev;
+static struct cdev usb_mouse_cdev;
+static int l_cnt, r_cnt, m_cnt;
+static int eof_flag;
 
 struct my_usb_struct {
 	char name[128];
@@ -64,12 +72,18 @@ static void usb_irq(struct urb *urb)
 	}
 
 	//разбор прерывания
-	if (data[0] & 0x01)
+	if (data[0] & 0x01) {
 		pr_info("interrupt from mouse: left button\n");
-	if (data[0] & 0x02)
+		l_cnt++;
+	}
+	if (data[0] & 0x02) {
 		pr_info("interrupt from mouse: right button\n");
-	if (data[0] & 0x04)
+		r_cnt++;
+	}
+	if (data[0] & 0x04) {
 		pr_info("interrupt from mouse: middle button\n");
+		m_cnt++;
+	}
 
 	//стандартный ввод мыши
 	input_report_key(dev, BTN_LEFT,   data[0] & 0x01);
@@ -98,6 +112,10 @@ static int usb_probe(struct usb_interface *interface,
 	struct usb_endpoint_descriptor *endpoint;
 	struct input_dev *input_dev;
 	int pipe, maxp;
+
+	l_cnt = 0;
+	r_cnt = 0;
+	m_cnt = 0;
 
 	pr_info("USB_mouse_interr: in probe()\n");
 
@@ -242,7 +260,104 @@ static struct usb_driver usb_driver = {
 	.disconnect	= usb_disconnect
 };
 
-module_usb_driver(usb_driver);
+static int usb_mouse_open(struct inode *inode, struct file *f)
+{
+	eof_flag = 0;
+	return 0;
+}
+
+static int usb_mouse_release(struct inode *inode, struct file *file)
+{
+	return 0;
+}
+
+static ssize_t usb_mouse_read(struct file *file,
+				char *bf,
+				size_t length,
+				loff_t *offset)
+{
+	char *temp = kmalloc(length, GFP_KERNEL);
+
+	if (temp == NULL)
+		return -1;
+
+	if (eof_flag) {
+		eof_flag = 0;
+		kfree(temp);
+		return 0;
+	}
+
+	//красиво выводим MAC
+	sprintf(temp, "Left clicks: %d\nRight clicks: %d\nMiddle clicks: %d\n",
+			l_cnt, r_cnt, m_cnt);
+
+	copy_to_user(bf, temp, strlen(temp));
+	eof_flag = 1;
+	kfree(temp);
+	return (ssize_t)strlen(temp);
+}
+
+static const struct file_operations usb_ops = {
+	.owner		= THIS_MODULE,
+	.read		= usb_mouse_read,
+	.open		= usb_mouse_open,
+	.release	= usb_mouse_release
+};
+
+static int __init usb_device_init(void)
+{
+	int ret;
+
+	pr_info("USB_mouse_int: init\n");
+
+	//выделяем место для симв. у-ва
+	ret = alloc_chrdev_region(&usb_mouse_dev, 0, 1, DEVICE_NAME);
+	if (ret < 0) {
+		pr_alert("USB_mouse_int: Failed to get a major number\n");
+		return -1;
+	}
+	pr_info("USB_mouse_int: major %d and minor %d\n",
+	MAJOR(usb_mouse_dev), MINOR(usb_mouse_dev));
+
+	//инициализируем cdev
+	cdev_init(&usb_mouse_cdev, &usb_ops);
+	usb_mouse_cdev.owner = THIS_MODULE;
+	ret = cdev_add(&usb_mouse_cdev, usb_mouse_dev, 1);
+	if (ret < 0) {
+		pr_alert("USB_mouse_int: Failed to register cdev\n");
+		unregister_chrdev_region(usb_mouse_dev, 1);
+		cdev_del(&usb_mouse_cdev);
+		return -1;
+	}
+
+	//выделяем устройство
+	ret = usb_register(&usb_driver);
+	if (ret < 0) {
+		pr_alert("USB_mouse_int: Failed to register usb\n");
+		unregister_chrdev_region(usb_mouse_dev, 1);
+		cdev_del(&usb_mouse_cdev);
+		return -1;
+	}
+
+	return 0;
+}
+
+static void __exit usb_device_exit(void)
+{
+	pr_info("USB_mouse_int: exit\n");
+	
+	usb_deregister(&usb_driver);
+
+	//освобождаем симв. у-во
+	cdev_del(&usb_mouse_cdev);
+	unregister_chrdev_region(usb_mouse_dev, 1);
+	pr_info("USB_mouse_int: exit completed\n");
+}
+
+module_init(usb_device_init);
+module_exit(usb_device_exit);
+
+//module_usb_driver(usb_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("USB mouse interrupt driver");
