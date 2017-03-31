@@ -287,7 +287,7 @@ static ssize_t usb_mouse_read(struct file *file,
 		return 0;
 	}
 
-	//красиво выводим MAC
+	//красиво выводим
 	sprintf(temp, "Left clicks: %d\nRight clicks: %d\nMiddle clicks: %d\n",
 			l_cnt, r_cnt, m_cnt);
 
